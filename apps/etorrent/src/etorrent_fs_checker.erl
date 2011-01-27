@@ -99,8 +99,8 @@ check_piece(TorrentID, PieceIndex) ->
 
 initialize_dictionary(Id, Path) ->
     %% Load the torrent
-    {ok, Torrent, Files, IH} = load_torrent(Path),
-    ok = ensure_file_sizes_correct(Id, Files),
+    {ok, Torrent, IH} = load_torrent(Path),
+    ok = etorrent_io:allocate(Id),
     Hashes = etorrent_metainfo:get_pieces(Torrent),
     {ok, Torrent, IH, Hashes}.
 
@@ -108,33 +108,8 @@ load_torrent(Path) ->
     Workdir = etorrent_config:work_dir(),
     P = filename:join([Workdir, Path]),
     {ok, Torrent} = etorrent_bcoding:parse_file(P),
-    Files = etorrent_metainfo:get_files(Torrent),
-    Name = etorrent_metainfo:get_name(Torrent),
     InfoHash = etorrent_metainfo:get_infohash(Torrent),
-    FilesToCheck =
-	case Files of
-	    [_] -> Files;
-	    [_|_] ->
-		[{filename:join([Name, Filename]), Size}
-		 || {Filename, Size} <- Files]
-	end,
-    {ok, Torrent, FilesToCheck, InfoHash}.
-
-ensure_file_sizes_correct(TorrentId, Files) ->
-    Dldir = etorrent_config:download_dir(),
-    lists:foreach(
-      fun ({Pth, ISz}) ->
-	      %% Perhaps try relpath here
-              F = filename:join([Dldir, Pth]),
-              Sz = filelib:file_size(F),
-	      case ISz - Sz of
-		  0 -> ok;
-		  N when is_integer(N), N > 0 ->
-		      etorrent_io:allocate(TorrentId, Pth, N)
-              end
-      end,
-      Files),
-    ok.
+    {ok, Torrent, InfoHash}.
 
 initialize_pieces_seed(Id, Hashes) ->
     L = length(Hashes),

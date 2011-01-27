@@ -86,9 +86,9 @@
 
 
 -record(state, {
-    socket,
-    sent,
-    tokens
+    socket :: gen_udp:socket(),
+    sent   :: gb_tree(),
+    tokens :: queue()
 }).
 
 %
@@ -568,7 +568,7 @@ tval(Client, TimeoutRef) ->
     {Client, TimeoutRef}.
 
 get_string(What, PL) ->
-    etorrent_bcoding:get_string_value(What, PL).
+    etorrent_bcoding:get_binary_value(What, PL).
 
 %
 % Generate a random token value. A token value is used to filter out bogus announce
@@ -587,7 +587,7 @@ random_token() ->
 init_tokens(NumTokens) ->
     queue:from_list([random_token() || _ <- lists:seq(1, NumTokens)]).
 %
-% Calculate the token value for a client based on the % client's IP address
+% Calculate the token value for a client based on the client's IP address
 % and Port number combined with a secret token value held by the socket server.
 % This avoids the need to store unique token values in the socket server.
 %
@@ -603,7 +603,7 @@ token_value(IP, Port, Tokens) ->
 
 %
 % Check if a token value included by a node in an announce message is bogus
-% of based on a token that is not recent enough.
+% (based on a token that is not recent enough).
 %
 is_valid_token(TokenValue, IP, Port, Tokens) ->
     ValidValues = [token_value(IP, Port, Token) || Token <- queue:to_list(Tokens)],
@@ -790,7 +790,7 @@ resp_get_peers_0_test() ->
         ++ "l6:axje.u6:idhtnmee1:t2:aa1:y1:re",
     Res = decode_msg(Enc),
     {response, _, Values} = Res,
-    {ID, Token, Peers, Nodes} = decode_response(get_peers, Values),
+    {ID, Token, Peers, _Nodes} = decode_response(get_peers, Values),
     ?assertEqual(etorrent_dht:integer_id(<<"abcdefghij0123456789">>), ID),
     ?assertEqual(<<"aoeusnth">>, Token),
     ?assertEqual([{{97,120,106,101},11893}, {{105,100,104,116}, 28269}], Peers).
@@ -801,7 +801,7 @@ resp_get_peers_1_test() ->
         ++ "1:t2:aa1:y1:re",
     Res = decode_msg(Enc),
     {response, _, Values} = Res,
-    {ID, Token, Peers, Nodes} = decode_response(get_peers, Values),
+    {ID, Token, _Peers, Nodes} = decode_response(get_peers, Values),
     ?assertEqual(etorrent_dht:integer_id(<<"abcdefghij0123456789">>), ID),
     ?assertEqual(<<"aoeusnth">>, Token),
     ?assertEqual([{etorrent_dht:integer_id(<<"0123456789abcdefghij">>),
@@ -813,6 +813,15 @@ resp_announce_peer_0_test() ->
     {response, _, Values} = Res,
     ID = decode_response(announce, Values),
     ?assertEqual(etorrent_dht:integer_id(<<"mnopqrstuvwxyz123456">>), ID).
+
+valid_token_test() ->
+    IP = {123,132,213,231},
+    Port = 1779,
+    TokenValues = init_tokens(10),
+    Token = token_value(IP, Port, TokenValues),
+    ?assertEqual(true, is_valid_token(Token, IP, Port, TokenValues)),
+    ?assertEqual(false, is_valid_token(<<"not there at all!">>,
+				       IP, Port, TokenValues)).
 
 -ifdef(EQC).
 
