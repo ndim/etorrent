@@ -13,8 +13,8 @@
 
 -behaviour(gen_fsm).
 
--include("types.hrl").
 -include("log.hrl").
+-include("types.hrl").
 
 -ignore_xref([{'start_link', 3}, {start, 1}, {initializing, 2},
 	      {started, 2}]).
@@ -27,7 +27,8 @@
          code_change/4]).
 
 -record(state, {id                :: integer() ,
-                path              :: string(),
+                torrent           :: bcode(),   % Parsed torrent file
+                info_hash         :: binary(),  % Infohash of torrent file
                 peer_id           :: binary(),
                 parent_pid        :: pid(),
                 tracker_pid       :: pid()   }).
@@ -37,10 +38,10 @@
 %% ====================================================================
 
 %% @doc Start the server process
--spec start_link(integer(), string(), binary()) ->
+-spec start_link(integer(), {bcode(), string(), binary()}, binary()) ->
         {ok, pid()} | ignore | {error, term()}.
-start_link(Id, Path, PeerId) ->
-    gen_fsm:start_link(?MODULE, [self(), Id, Path, PeerId], []).
+start_link(Id, {Torrent, TorrentFile, TorrentIH}, PeerId) ->
+    gen_fsm:start_link(?MODULE, [self(), Id, {Torrent, TorrentFile, TorrentIH}, PeerId], []).
 
 %% @doc Request that the given torrent is checked (eventually again)
 %% @end
@@ -57,12 +58,13 @@ completed(Pid) ->
 %% ====================================================================
 
 %% @private
-init([Parent, Id, Path, PeerId]) ->
-    etorrent_table:new_torrent(Path, Parent, Id),
+init([Parent, Id, {Torrent, TorrentFile, TorrentIH}, PeerId]) ->
+    etorrent_table:new_torrent(TorrentFile, TorrentIH, Parent, Id),
     etorrent_chunk_mgr:new(Id),
     gproc:add_local_name({torrent, Id, control}),
     {ok, initializing, #state{id = Id,
-                              path = Path,
+                              torrent = Torrent,
+                              info_hash = TorrentIH,
                               peer_id = PeerId,
                               parent_pid = Parent}, 0}. % Force timeout instantly.
 
@@ -77,13 +79,12 @@ initializing(timeout, S) ->
 
             %% Read the torrent, check its contents for what we are missing
             etorrent_event:checking_torrent(S#state.id),
-            {ok, Torrent, InfoHash, NumberOfPieces} =
+            {ok, NumberOfPieces} =
                 read_and_check_torrent(S#state.id,
-				       S#state.path),
+				       S#state.torrent),
             etorrent_piece_mgr:add_monitor(self(), S#state.id),
-            %% Update the tracking map. This torrent has been started, and we
-            %%  know its infohash
-            etorrent_table:statechange_torrent(S#state.id, {infohash, InfoHash}),
+
+            %% Update the tracking map. This torrent has been started.
             etorrent_table:statechange_torrent(S#state.id, started),
 
 	    {AU, AD} =
@@ -100,16 +101,16 @@ initializing(timeout, S) ->
                     {downloaded, 0},
 		    {all_time_uploaded, AU},
 		    {all_time_downloaded, AD},
-                    {left, calculate_amount_left(S#state.id, NumberOfPieces, Torrent)},
-                    {total, etorrent_metainfo:get_length(Torrent)}},
+                    {left, calculate_amount_left(S#state.id, NumberOfPieces, S#state.torrent)},
+                    {total, etorrent_metainfo:get_length(S#state.torrent)}},
                    NumberOfPieces),
 
             %% Start the tracker
             {ok, TrackerPid} =
                 etorrent_torrent_sup:start_child_tracker(
                   S#state.parent_pid,
-                  etorrent_metainfo:get_url(Torrent),
-                  etorrent_metainfo:get_infohash(Torrent),
+                  etorrent_metainfo:get_url(S#state.torrent),
+                  S#state.info_hash,
                   S#state.peer_id,
                   S#state.id),
 
@@ -188,16 +189,14 @@ check_torrent_for_bad_pieces(Id) ->
 	   end].
 
 % @doc Read and check a torrent
-% <p>The torrent given by Id, at Path (the .torrent file) will be checked for
+% <p>The torrent given by Id, and parsed content will be checked for
 %  correctness. We return a tuple
 %  with various information about said torrent: The decoded Torrent dictionary,
 %  the info hash and the number of pieces in the torrent.</p>
 % @end
--spec read_and_check_torrent(integer(), string()) -> {ok, bcode(), binary(), integer()}.
-read_and_check_torrent(Id, Path) ->
-    {ok, Torrent, Infohash, Hashes} =
-        initialize_dictionary(Id, Path),
-
+-spec read_and_check_torrent(integer(), bcode()) -> {ok, integer()}.
+read_and_check_torrent(Id, Torrent) ->
+    {ok, Hashes} = initialize_dictionary(Id, Torrent),
     L = length(Hashes),
 
     %% Check the contents of the torrent, updates the state of the piecemap
@@ -222,23 +221,15 @@ read_and_check_torrent(Id, Path) ->
             ok = initialize_pieces_from_disk(FS, Id, Hashes)
     end,
 
-    {ok, Torrent, Infohash, L}.
+    {ok, L}.
 
 %% =======================================================================
 
-initialize_dictionary(Id, Path) ->
+initialize_dictionary(Id, Torrent) ->
     %% Load the torrent
-    {ok, Torrent, IH} = load_torrent(Path),
     ok = etorrent_io:allocate(Id),
     Hashes = etorrent_metainfo:get_pieces(Torrent),
-    {ok, Torrent, IH, Hashes}.
-
-load_torrent(Path) ->
-    Workdir = etorrent_config:work_dir(),
-    P = filename:join([Workdir, Path]),
-    {ok, Torrent} = etorrent_bcoding:parse_file(P),
-    InfoHash = etorrent_metainfo:get_infohash(Torrent),
-    {ok, Torrent, InfoHash}.
+    {ok, Hashes}.
 
 initialize_pieces_seed(Id, Hashes) ->
     L = length(Hashes),
