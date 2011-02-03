@@ -56,7 +56,7 @@ query_state(Id) ->
 %% ==================================================================
 
 %% Enter a torrent into the tracking table
-track_torrent(Id, FName) ->
+track_torrent(Id, InfoHash) ->
     case etorrent_torrent:lookup(Id) of
         not_found -> ignore;
         {value, PL} ->
@@ -68,27 +68,27 @@ track_torrent(Id, FName) ->
 	    case proplists:get_value(state, PL) of
 		unknown -> ignore;
 		seeding -> ets:insert(?MODULE,
-				      {FName, [{state, seeding},
-					       {uploaded, Uploaded},
-					       {downloaded, Downloaded}]});
+				      {InfoHash, [{state, seeding},
+						  {uploaded, Uploaded},
+						  {downloaded, Downloaded}]});
 		_Other  -> ets:insert(
 			     ?MODULE,
-			     {FName, [{state,
-				       {bitfield, etorrent_piece_mgr:bitfield(Id)}},
-				      {uploaded, Uploaded},
-				      {downloaded, Downloaded}]})
+			     {InfoHash, [{state,
+					  {bitfield, etorrent_piece_mgr:bitfield(Id)}},
+					 {uploaded, Uploaded},
+					 {downloaded, Downloaded}]})
 	    end
     end.
 
 %% Enter all torrents into a tracking table
 track_in_ets_table(Lst) when is_list(Lst) ->
-    [track_torrent(Id, FN) || {Id, FN} <- Lst].
+    [track_torrent(Id, IH) || {Id, IH} <- Lst].
 
 %% Run a persistence operation
 persist_to_disk() ->
     PLS = etorrent_table:all_torrents(),
     track_in_ets_table([{proplists:get_value(id, P),
-			 proplists:get_value(filename, P)} || P <- PLS]),
+			 proplists:get_value(info_hash, P)} || P <- PLS]),
     F  = etorrent_config:fast_resume_file(),
     ok = filelib:ensure_dir(F),
     ok = ets:tab2file(etorrent_fast_resume, F, [{extended_info, [object_count, md5sum]}]),
@@ -122,7 +122,7 @@ init([]) ->
 %% @private
 handle_call({query_state, Id}, _From, S) ->
     {value, PL} = etorrent_table:get_torrent(Id),
-    case ets:lookup(etorrent_fast_resume, proplists:get_value(filename, PL)) of
+    case ets:lookup(etorrent_fast_resume, proplists:get_value(info_hash, PL)) of
         [] -> {reply, unknown, S};
         [{_, FSPL}] when is_list(FSPL) -> {reply, {value, FSPL}, S};
 	[{_, St}] -> {reply, {value, upgrade(1, St)}, S}
